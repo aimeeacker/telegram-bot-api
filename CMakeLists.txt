@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
 project(TelegramBotApi VERSION 10.3 LANGUAGES CXX)
 
 add_subdirectory(td EXCLUDE_FROM_ALL)
+include(CMake/RawMcpJson.cmake)
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
@@ -83,8 +84,16 @@ set(TELEGRAM_BOT_API_SOURCE
   telegram-bot-api/WebhookActor.h
 )
 
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/telegram-bot-api/stats.html" STATS_HTML_CONTENT)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/telegram-bot-api/stats_html.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/stats_html.h"
+  @ONLY
+)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/telegram-bot-api/stats.html")
+
 add_executable(telegram-bot-api ${TELEGRAM_BOT_API_SOURCE})
-target_include_directories(telegram-bot-api PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+target_include_directories(telegram-bot-api PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}> "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(telegram-bot-api PRIVATE memprof tdactor tdcore tddb tdnet tdutils)
 
 install(TARGETS telegram-bot-api RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")

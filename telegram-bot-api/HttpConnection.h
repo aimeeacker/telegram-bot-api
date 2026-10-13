@@ -15,6 +15,7 @@
 #include "td/actor/actor.h"
 
 #include "td/utils/buffer.h"
+#include "td/utils/common.h"
 #include "td/utils/Slice.h"
 #include "td/utils/Status.h"
 
@@ -37,16 +38,24 @@ class HttpConnection final : public td::HttpInboundConnection::Callback {
   td::ActorOwn<td::HttpInboundConnection> connection_;
   std::shared_ptr<SharedData> shared_data_;
 
+  bool is_mcp_request_ = false;
+  td::string mcp_request_id_json_ = "null";
+  td::string mcp_protocol_version_ = "2025-11-25";
+
   void hangup() final {
     connection_.release();
     stop();
   }
 
+  void handle_mcp(td::unique_ptr<td::HttpQuery> http_query);
+  td::Promise<td::unique_ptr<Query>> make_query_promise();
   void on_query_finished(td::Result<td::unique_ptr<Query>> r_query);
 
   void send_response(int http_status_code, td::BufferSlice &&content, int retry_after);
-
   void send_http_error(int http_status_code, td::CSlice description);
+  void send_mcp_result(td::Slice result);
+  void send_mcp_error(int http_status_code, int error_code, td::Slice message, td::Slice id_json = "null",
+                      td::Slice data_json = {});
 };
 
 }  // namespace telegram_bot_api

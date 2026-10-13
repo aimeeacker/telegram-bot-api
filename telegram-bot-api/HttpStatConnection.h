@@ -29,7 +29,7 @@ class HttpStatConnection final : public td::HttpInboundConnection::Callback {
   td::ActorId<ClientManager> client_manager_;
   td::ActorOwn<td::HttpInboundConnection> connection_;
 
-  void on_result(td::Result<td::BufferSlice> result);
+  void on_result(td::Result<ClientManager::StatsResponse> result);
 
   void hangup() final {
     connection_.release();

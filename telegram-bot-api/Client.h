@@ -57,6 +57,8 @@ class Client final : public WebhookActor::Callback {
   // for stats
   ServerBotInfo get_bot_info() const;
 
+  void log_out_from_stats();
+
  private:
   using int32 = td::int32;
   using int64 = td::int64;

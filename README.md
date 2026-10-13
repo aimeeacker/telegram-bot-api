@@ -6,6 +6,66 @@ If you've got any questions about bots or would like to report an issue with you
 
 Please note that only global Bot API issues that affect all bots are suitable for this repository.
 
+## Custom Fork Optimizations & Upgrades
+
+This repository tracks upstream `tdlib/telegram-bot-api` and currently includes **Bot API 10.3** plus a small set of self-hosting features:
+
+1. **Operations Dashboard (`:8082/stats`)**
+   * Responsive dark dashboard with server health, memory, request activity, bot uptime, pending updates, delivery mode, and collapsible diagnostics.
+   * Bot tokens are never rendered in HTML, action URLs, or the legacy text/TSV stats view.
+   * Per-bot controls support logout, setting/updating a webhook URL, optional secret token, max connections, allowed updates, dropping pending updates, and switching back to polling.
+   * A `Logout all` action is available for terminating every active local bot session.
+   * Controls submit HTTP POST requests without placing webhook secrets in URLs. Webhook operations display the actual Bot API result; logout controls acknowledge the asynchronous logout request.
+   * Stats responses use `Cache-Control: no-store` and related browser hardening headers.
+   * The original text stats format remains available with `format=text`, `text=1`, or `tsv=1`.
+
+2. **Built-in MCP endpoint (`:8081/mcp`)**
+   * Implements stateless JSON-over-HTTP MCP with current `2026-07-28` discovery/tool calls and compatibility with `2025-11-25` initialization clients.
+   * Exposes exactly two tools: `send_message` and `edit_message`.
+   * The default Telegram bot and destination chat are configured with environment variables. Clients cannot override them or read the bot token; successful message results include Telegram's usual message and chat metadata.
+   * Optional bearer authentication can protect the MCP endpoint.
+
+   Environment variables:
+
+   ```sh
+   TELEGRAM_MCP_BOT_TOKEN=123456:bot-token
+   TELEGRAM_MCP_CHAT_ID=-1001234567890
+   # Optional but recommended when /mcp is reachable by untrusted clients:
+   TELEGRAM_MCP_BEARER_TOKEN=change-me
+   ```
+
+   For modern clients, include `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method`, and `params._meta` with `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities`. Tool calls also include `Mcp-Name`. Legacy clients can use `initialize` with `protocolVersion: 2025-11-25` and send subsequent requests with the matching protocol header. Responses use JSON; this endpoint does not open an SSE stream.
+
+   For compatibility with older clients, omitted `_meta` fields and mirrored headers are accepted; supplied values are validated. The JSON body must still contain exactly one complete request object.
+
+3. **Self-hosting defaults**
+   * Zero-argument runtime defaults remain optimized for the local deployment used by this fork:
+     - `--http-port=8081`
+     - `--http-stat-port=8082`
+     - `--http-ip-address=0.0.0.0`
+     - `--dir=/opt/telegram-bot-api-data` (or `$TELEGRAM_WORK_DIR`)
+     - `--temp-dir=/tmp/telegram-bot-api` (or `$TELEGRAM_TEMP_DIR`)
+     - `--local`
+
+4. **GitHub Actions build + GHCR image**
+   * Release build on Ubuntu 24.04 with recursive TDLib checkout, binary verification, and an uploaded Linux x86_64 artifact.
+   * The Ubuntu/glibc x86_64 artifact remains unchanged. The Docker image is built independently with Alpine/musl in a multi-stage build, compiled with `-j4`, stripped, and published as a compact `linux/amd64` image suitable for Docker on OpenWrt x86_64 hosts.
+   * Published tags include `latest` and an immutable `sha-<commit>` tag. Pull requests build the image for validation but do not publish it.
+
+   Example OpenWrt/Docker deployment:
+
+   ```sh
+   docker pull ghcr.io/aimeeacker/telegram-bot-api:latest
+   docker run -d --name telegram-bot-api --restart unless-stopped \
+     -p 8081:8081 -p 8082:8082 \
+     -e TELEGRAM_API_ID=YOUR_API_ID \
+     -e TELEGRAM_API_HASH=YOUR_API_HASH \
+     -e TELEGRAM_MCP_BOT_TOKEN=YOUR_BOT_TOKEN \
+     -e TELEGRAM_MCP_CHAT_ID=YOUR_CHAT_ID \
+     -v telegram-bot-api-data:/opt/telegram-bot-api-data \
+     ghcr.io/aimeeacker/telegram-bot-api:latest
+   ```
+
 ## Table of Contents
 - [Installation](#installation)
 - [Dependencies](#dependencies)

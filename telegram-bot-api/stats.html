@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Telegram Bot API Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b13;
+      --panel: #0e1624;
+      --panel-card: linear-gradient(180deg, #121c2e, #0c1320);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --border-focus: rgba(56, 189, 248, 0.5);
+      --text: #f1f5f9;
+      --text-muted: #8ba1b7;
+      --accent: #38bdf8;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(120% 80% at 50% -20%, #132742 0%, var(--bg) 60%);
+      background-attachment: fixed;
+      color: var(--text);
+      font: 14px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px 20px 48px;
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1400px; margin: auto; }
+    .top {
+      display: flex; gap: 16px; align-items: center; justify-content: space-between;
+      margin-bottom: 24px; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-icon {
+      width: 40px; height: 40px; border-radius: 12px;
+      background: linear-gradient(135deg, #0284c7, #0369a1);
+      display: grid; place-items: center;
+      box-shadow: 0 0 20px rgba(2, 132, 199, 0.35);
+    }
+    .brand h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: -0.02em; }
+    .brand p { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
+    .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border: 1px solid var(--border);
+      border-radius: 999px; background: #0d1522;
+      color: #cbd5e1; font-size: 11px; font-weight: 600;
+    }
+    .badge.ok { color: #6ee7b7; border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.08); }
+    .badge.warn { color: #fde047; border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+    .refresh-bar {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #0d1522; border: 1px solid var(--border);
+      border-radius: 999px; padding: 3px 8px 3px 12px;
+      font-size: 12px; color: var(--text-muted);
+    }
+    .refresh-bar select {
+      background: transparent; border: 0; color: var(--text);
+      font-size: 12px; outline: none; cursor: pointer; padding: 2px 4px;
+    }
+    .btn-icon {
+      background: transparent; border: 0; color: var(--text-muted);
+      cursor: pointer; padding: 4px; border-radius: 6px;
+      display: inline-flex; align-items: center;
+    }
+    .btn-icon:hover { color: var(--accent); }
+    .cards {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px; margin-bottom: 28px;
+    }
+    .card {
+      background: var(--panel-card); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 18px 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    }
+    .card-head { display: flex; align-items: center; justify-content: space-between; color: var(--text-muted); }
+    .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; }
+    .card-val { font-size: 24px; font-weight: 700; margin-top: 8px; letter-spacing: -0.02em; font-feature-settings: "tnum"; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: auto;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+    }
+    .section-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin: 28px 0 14px; flex-wrap: wrap;
+    }
+    .section-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+    .search-box {
+      background: #090e18; border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 7px 12px;
+      color: var(--text); font-size: 13px; outline: none; min-width: 260px;
+    }
+    .search-box:focus { border-color: var(--border-focus); }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th {
+      background: #0a101a; color: var(--text-muted); font-size: 11px;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    td { padding: 14px 16px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+    .token-id { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; color: var(--accent); }
+    .bot-title { font-weight: 600; font-size: 14px; }
+    .url-chip {
+      display: inline-block; max-width: 260px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; font-size: 12px;
+      color: #93c5fd; background: rgba(59, 130, 246, 0.1);
+      padding: 3px 8px; border-radius: var(--radius-sm);
+    }
+    .actions { display: inline-flex; gap: 8px; }
+    .btn {
+      appearance: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: #141f30; color: #e2e8f0; font-size: 12px; font-weight: 500;
+      padding: 5px 10px; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .btn:hover { background: #1c2b42; border-color: rgba(255, 255, 255, 0.18); }
+    .btn.danger { background: rgba(244, 63, 94, 0.12); color: #fda4af; border-color: rgba(244, 63, 94, 0.25); }
+    .btn.danger:hover { background: rgba(244, 63, 94, 0.22); }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .status { color: var(--text-muted); font-size: 12px; margin: 8px 0; }
+    .notice { padding: 10px 14px; margin: 12px 0; border: 1px solid var(--border); border-radius: var(--radius-md); }
+    .notice.error { color: #fda4af; border-color: rgba(244, 63, 94, 0.3); }
+    .notice.success { color: #6ee7b7; }
+    .empty-state { padding: 48px 20px; text-align: center; color: var(--text-muted); }
+    details { margin-top: 24px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #0a0f1a; }
+    summary { padding: 12px 18px; font-weight: 600; cursor: pointer; user-select: none; color: var(--text-muted); }
+    summary:hover { color: var(--text); }
+    .diag-body { padding: 0 18px 16px; }
+    .diag-table { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+    .diag-table td { padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); }
+    dialog {
+      background: #0f172a; border: 1px solid #334155; border-radius: var(--radius-lg);
+      color: var(--text); padding: 24px; max-width: 480px; width: 90vw;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(4px); }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+    .form-group input:not([type="checkbox"]), .form-group textarea {
+      width: 100%; background: #030712; border: 1px solid #1e293b; border-radius: var(--radius-sm);
+      padding: 8px 10px; color: var(--text); font-size: 13px; outline: none;
+    }
+    .form-group input:focus, .form-group textarea:focus { border-color: var(--accent); }
+    .form-group small { display: block; margin-top: 4px; color: var(--text-muted); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    @media (max-width: 600px) {
+      body { padding: 16px 12px 32px; }
+      .search-box { min-width: 0; width: 100%; }
+      .bot-controls { flex: 1; flex-wrap: wrap; }
+      th, td { padding: 10px 12px; }
+      dialog { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Telegram Bot API</h1>
+        <p>Operations & Diagnostics Console</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="badges">
+        <span class="badge ok" id="badge-version"><span class="dot"></span>Bot API <span id="val-version">...</span></span>
+        <span class="badge" id="badge-mcp"><span class="dot"></span>MCP <span id="val-mcp">...</span></span>
+      </div>
+      <div class="refresh-bar">
+        <span>Refresh:</span>
+        <select id="refresh-sel" onchange="setRefresh(this.value)">
+          <option value="0">Off</option>
+          <option value="3">3s</option>
+          <option value="5" selected>5s</option>
+          <option value="10">10s</option>
+          <option value="30">30s</option>
+        </select>
+        <span id="countdown" style="font-feature-settings:'tnum';min-width:24px;text-align:right">5s</span>
+        <button class="btn-icon" title="Refresh Now" onclick="doRefresh()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M21 12a9 9 0 1 1-2.7-6.4L21 8"/><path d="M21 3v5h-5"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-head"><span class="card-title">Active Bots</span></div>
+      <div class="card-val" id="val-bots">- / -</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Server Uptime</span></div>
+      <div class="card-val" id="val-uptime">-</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Memory (RSS / Peak)</span></div>
+      <div class="card-val" id="val-memory" style="font-size:18px">- / -</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-title">Requests / Webhooks</span></div>
+      <div class="card-val" id="val-requests">- / -</div>
+    </div>
+  </div>
+
+  <div class="section-bar">
+    <h2 class="section-title">Registered Bots</h2>
+    <div class="bot-controls" style="display:flex;gap:10px;align-items:center">
+      <input type="text" class="search-box" id="search-input" placeholder="Filter by Bot ID or username..." oninput="applyFilter()">
+      <button type="button" class="btn danger" id="logout-all">Logout All</button>
+    </div>
+  </div>
+
+  <p class="status" id="refresh-status" role="status">Connecting...</p>
+  <div class="notice" id="action-notice" role="status" hidden></div>
+  <div class="panel">
+    <table id="bot-table">
+      <thead>
+        <tr>
+          <th>Bot ID</th>
+          <th>Username</th>
+          <th>Uptime</th>
+          <th>Mode / Webhook</th>
+          <th>Pending</th>
+          <th>Rates (Upd/Req)</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bot-tbody">
+        <tr><td colspan="7" class="empty-state">Loading bot instances...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <details>
+    <summary>Server Diagnostics & Metrics</summary>
+    <div class="diag-body">
+      <table class="diag-table">
+        <tbody id="diag-tbody">
+          <tr><td>Loading diagnostics...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+
+<dialog id="webhook-modal">
+  <form id="webhook-form" method="post" action="/stats">
+    <input type="hidden" name="action" value="set_webhook">
+    <input type="hidden" name="client" id="modal-client-id">
+    <h3 style="margin:0 0 16px;font-size:16px" id="modal-title">Configure Webhook</h3>
+    <div class="form-group">
+      <label for="modal-url">Webhook URL:</label>
+      <input type="url" name="url" id="modal-url" placeholder="https://domain.com/webhook" required>
+    </div>
+    <div class="form-group">
+      <label for="modal-secret">Secret Token (Optional):</label>
+      <input type="password" name="secret_token" id="modal-secret" autocomplete="off" placeholder="Optional webhook verification secret">
+      <small>Enter the secret to set or retain it. Leaving this blank clears the secret.</small>
+    </div>
+    <div class="form-group">
+      <label for="modal-updates">Allowed Updates (Optional JSON):</label>
+      <textarea name="allowed_updates" id="modal-updates" rows="2" placeholder='["message", "callback_query"]'></textarea>
+      <small>Leave blank to retain the current selection. Use [] for Telegram's default update types.</small>
+    </div>
+    <div class="form-group" style="display:flex;gap:10px">
+      <div style="flex:1">
+        <label for="modal-connections">Max Connections:</label>
+        <input type="number" name="max_connections" id="modal-connections" min="1" max="100000" step="1">
+      </div>
+      <div style="display:flex;align-items:center;margin-top:18px">
+        <label style="margin:0;cursor:pointer"><input type="checkbox" name="drop_pending_updates" value="1"> Drop Pending</label>
+      </div>
+    </div>
+    <p class="status" id="webhook-error" role="alert" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn danger" id="modal-del-btn" onclick="deleteWebhookMode()">Delete Webhook</button>
+      <button type="button" class="btn" onclick="closeWebhook()">Cancel</button>
+      <button type="submit" class="btn" style="background:#0284c7;border-color:#0284c7;color:#fff">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+let refreshInterval = 5, countdown = 5, timer = null, latestBots = [];
+let refreshPromise = null, actionBusy = false, defaultConnections = 100, maxConnections = 100000;
+
+function setRefresh(val) {
+  refreshInterval = Number(val);
+  countdown = refreshInterval;
+  clearInterval(timer);
+  document.getElementById('countdown').textContent = refreshInterval ? countdown + 's' : 'Off';
+  if (refreshInterval > 0) timer = setInterval(tick, 1000);
+}
+
+function tick() {
+  if (--countdown <= 0) {
+    countdown = refreshInterval;
+    doRefresh();
+  }
+  document.getElementById('countdown').textContent = countdown + 's';
+}
+
+function doRefresh() {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    const status = document.getElementById('refresh-status');
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch('/stats?format=json', {
+        cache: 'no-store', credentials: 'same-origin', signal: controller.signal
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.description || `HTTP ${res.status}`);
+      renderStats(data);
+      status.textContent = `Updated ${new Date().toLocaleTimeString()} · ${latestBots.length} bot sessions`;
+    } catch (err) {
+      const msg = err.name === 'AbortError' ? 'Request timed out' : err.message;
+      status.textContent = `Refresh failed: ${msg}. Displaying the last successful snapshot.`;
+    } finally {
+      clearTimeout(timerId);
+      countdown = refreshInterval;
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
+function formatUptime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  let res = '';
+  if (d > 0) res += d + 'd ';
+  if (h > 0 || d > 0) res += h + 'h ';
+  if (m > 0 || h > 0 || d > 0) res += m + 'm ';
+  return res + (s % 60) + 's';
+}
+
+function renderStats(d) {
+  document.getElementById('val-version').textContent = d.version || '-';
+  const configured = !!(d.mcp && d.mcp.configured);
+  document.getElementById('badge-mcp').className = configured ? 'badge ok' : 'badge warn';
+  document.getElementById('val-mcp').textContent = configured
+    ? (d.mcp.has_bearer ? 'Active (Auth)' : 'Active') : 'Unconfigured';
+  document.getElementById('val-bots').textContent = `${d.active_bot_count || 0} / ${d.bot_count || 0}`;
+  document.getElementById('val-uptime').textContent = formatUptime(d.uptime);
+  document.getElementById('val-memory').textContent = `${d.memory?.rss || '-'} / ${d.memory?.rss_peak || '-'}`;
+  document.getElementById('val-requests').textContent = `${d.active_requests || 0} / ${d.active_webhook_connections || 0}`;
+  defaultConnections = d.default_max_webhook_connections || 100;
+  maxConnections = d.max_webhook_connections || 100000;
+  latestBots = d.bots || [];
+  applyFilter();
+  document.getElementById('diag-tbody').innerHTML = (d.diagnostics || []).map(item =>
+    `<tr><td style="color:#94a3b8;width:240px">${escapeHtml(item.name)}</td><td>${escapeHtml(item.value)}</td></tr>`
+  ).join('');
+}
+
+function applyFilter() {
+  const query = document.getElementById('search-input').value.trim().toLowerCase();
+  const filtered = latestBots.filter(b => !query || String(b.id).includes(query) ||
+    (b.username && b.username.toLowerCase().includes(query)));
+  const tbody = document.getElementById('bot-tbody');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${latestBots.length
+      ? 'No bots matching filter' : 'No active bot sessions'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(b => {
+    const modeHtml = b.webhook
+      ? `<span class="url-chip" title="${escapeHtml(b.webhook)}">${escapeHtml(b.webhook)}</span>`
+      : '<span class="badge" style="background:#1e293b;color:#94a3b8">Polling</span>';
+    const clientId = escapeHtml(b.client_id);
+    return `<tr>
+      <td><span class="token-id">${escapeHtml(b.id)}</span></td>
+      <td><span class="bot-title">${b.username ? '@' + escapeHtml(b.username) : 'Bot'}</span></td>
+      <td style="color:#94a3b8">${formatUptime(b.uptime)}</td>
+      <td>${modeHtml}</td>
+      <td>${b.pending_updates > 0 ? `<span class="badge warn">${escapeHtml(b.pending_updates)}</span>` : '<span style="color:#64748b">0</span>'}</td>
+      <td style="color:#94a3b8">${escapeHtml(b.update_rate || '0.00')} / ${escapeHtml(b.request_rate || '0.00')}</td>
+      <td style="text-align:right"><div class="actions">
+        <button type="button" class="btn" data-action="webhook" data-client="${clientId}" ${actionBusy ? 'disabled' : ''}>Webhook</button>
+        <button type="button" class="btn danger" data-action="logout" data-client="${clientId}" ${actionBusy ? 'disabled' : ''}>Logout</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function showNotice(message, isError = false) {
+  const notice = document.getElementById('action-notice');
+  notice.textContent = message;
+  notice.className = 'notice ' + (isError ? 'error' : 'success');
+  notice.hidden = false;
+}
+
+function setActionBusy(busy) {
+  actionBusy = busy;
+  document.querySelectorAll('#bot-tbody button, #logout-all, #webhook-form button').forEach(button => {
+    button.disabled = busy;
+  });
+}
+
+async function performAction(action, clientId, extra = {}) {
+  if (actionBusy) return false;
+  setActionBusy(true);
+  document.getElementById('webhook-error').hidden = true;
+  const controller = new AbortController();
+  const timerId = setTimeout(() => controller.abort(), 10000);
+  let success = false;
+  try {
+    const body = new URLSearchParams({ ...extra, action });
+    if (clientId != null) body.set('client', String(clientId));
+    const res = await fetch('/stats', {
+      method: 'POST', credentials: 'same-origin', referrerPolicy: 'no-referrer',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: controller.signal,
+      body
+    });
+    const result = await res.json();
+    if (!res.ok || result.ok !== true) throw new Error(result.description || `HTTP ${res.status}`);
+    const message = result.description || (action === 'set_webhook' ? 'Webhook saved.' : 'Switched to polling.');
+    showNotice(message);
+    if (action === 'set_webhook' || action === 'delete_webhook') closeWebhook();
+    success = true;
+  } catch (err) {
+    const msg = err.name === 'AbortError' ? 'Action request timed out' : err.message;
+    showNotice(msg, true);
+    const error = document.getElementById('webhook-error');
+    error.textContent = msg;
+    error.hidden = false;
+  } finally {
+    clearTimeout(timerId);
+    setActionBusy(false);
+  }
+
+  if (success) {
+    (async () => {
+      try {
+        if (refreshPromise) await refreshPromise;
+        await doRefresh();
+      } catch (_) {}
+    })();
+  }
+  return success;
+}
+
+function openWebhook(bot) {
+  const form = document.getElementById('webhook-form');
+  form.reset();
+  document.getElementById('modal-client-id').value = String(bot.client_id);
+  document.getElementById('modal-title').textContent = `Webhook · ${bot.username ? '@' + bot.username : bot.id}`;
+  document.getElementById('modal-url').value = bot.webhook || '';
+  const connections = document.getElementById('modal-connections');
+  connections.value = bot.webhook_max_connections || defaultConnections;
+  connections.max = maxConnections;
+  document.getElementById('modal-del-btn').style.display = bot.webhook ? 'inline-flex' : 'none';
+  document.getElementById('webhook-error').hidden = true;
+  document.getElementById('webhook-modal').showModal();
+}
+
+function closeWebhook() { document.getElementById('webhook-modal').close(); }
+
+function deleteWebhookMode() {
+  if (!confirm('Switch this bot to Polling mode and delete webhook?')) return;
+  const form = document.getElementById('webhook-form');
+  const drop = new FormData(form).get('drop_pending_updates');
+  performAction('delete_webhook', document.getElementById('modal-client-id').value,
+    drop ? { drop_pending_updates: drop } : {});
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  setRefresh(document.getElementById('refresh-sel').value);
+  doRefresh();
+  document.getElementById('logout-all').addEventListener('click', () => {
+    if (confirm('Log out ALL active bot sessions?')) performAction('logout_all');
+  });
+  document.getElementById('bot-tbody').addEventListener('click', event => {
+    const button = event.target.closest('button[data-action]');
+    if (!button || button.disabled) return;
+    const bot = latestBots.find(b => String(b.client_id) === button.dataset.client);
+    if (!bot) return;
+    if (button.dataset.action === 'webhook') openWebhook(bot);
+    else if (confirm(`Log out bot ${bot.id}?`)) performAction('logout', bot.client_id);
+  });
+  document.getElementById('webhook-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+    const fields = Object.fromEntries(new FormData(form));
+    const updates = fields.allowed_updates.trim();
+    if (updates) {
+      try {
+        const parsed = JSON.parse(updates);
+        if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'string')) throw new Error();
+        fields.allowed_updates = JSON.stringify(parsed);
+      } catch (_) {
+        const error = document.getElementById('webhook-error');
+        error.textContent = 'Allowed updates must be a JSON array of strings.';
+        error.hidden = false;
+        return;
+      }
+    } else {
+      delete fields.allowed_updates;
+    }
+    performAction('set_webhook', fields.client, fields);
+  });
+  document.getElementById('webhook-modal').addEventListener('click', event => {
+    const modal = event.currentTarget;
+    if (event.target !== modal) return;
+    const rect = modal.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right ||
+        event.clientY < rect.top || event.clientY > rect.bottom) closeWebhook();
+  });
+});
+</script>
+</body>
+</html>

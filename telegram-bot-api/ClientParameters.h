@@ -28,6 +28,11 @@ class NetQueryStats;
 namespace telegram_bot_api {
 
 struct SharedData {
+  // Optional MCP bridge configuration. Secrets are kept in-process and are never exposed by /stats.
+  td::string mcp_bot_token_;
+  td::string mcp_chat_id_;
+  td::string mcp_bearer_token_;
+
   std::atomic<td::uint64> query_count_{0};
   std::atomic<size_t> query_list_size_{0};
   std::atomic<int> next_verbosity_level_{-1};

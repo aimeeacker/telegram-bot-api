@@ -8539,6 +8539,11 @@ void Client::update_last_synchronization_error_date() {
   last_synchronization_error_date_ = get_unix_time();
 }
 
+void Client::log_out_from_stats() {
+  clear_tqueue_ = true;
+  log_out(0, td::Slice());
+}
+
 ServerBotInfo Client::get_bot_info() const {
   ServerBotInfo res;
   res.id_ = bot_token_id_;

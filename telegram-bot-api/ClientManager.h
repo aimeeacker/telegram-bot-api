@@ -46,7 +46,14 @@ class ClientManager final : public td::Actor {
 
   void send(PromisedQueryPtr query);
 
-  void get_stats(td::Promise<td::BufferSlice> promise, td::vector<std::pair<td::string, td::string>> args);
+  struct StatsResponse {
+    td::BufferSlice content;
+    td::Slice content_type = "application/json; charset=utf-8";
+    int http_status_code = 200;
+  };
+
+  void get_stats(td::Promise<StatsResponse> promise, td::vector<std::pair<td::string, td::string>> args,
+                 bool allow_actions);
 
   void close(td::Promise<td::Unit> &&promise);
 

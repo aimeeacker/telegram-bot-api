@@ -8,6 +8,7 @@
 
 #include "telegram-bot-api/ClientParameters.h"
 #include "telegram-bot-api/WebhookActor.h"
+#include "stats_html.h"
 
 #include "td/telegram/ClientActor.h"
 #include "td/telegram/td_api.h"
@@ -190,33 +191,150 @@ ClientManager::TopClients ClientManager::get_top_clients(std::size_t max_count, 
   return result;
 }
 
-void ClientManager::get_stats(td::Promise<td::BufferSlice> promise,
-                              td::vector<std::pair<td::string, td::string>> args) {
+static ClientManager::StatsResponse make_stats_action_response(td::Slice message) {
+  return {td::json_encode<td::BufferSlice>(JsonQueryOk<td::JsonTrue>(td::JsonTrue(), message))};
+}
+
+void ClientManager::get_stats(td::Promise<StatsResponse> promise,
+                              td::vector<std::pair<td::string, td::string>> args, bool allow_actions) {
   if (close_flag_) {
-    promise.set_value(td::BufferSlice("Closing"));
+    promise.set_error(td::Status::Error(503, "Server is closing"));
     return;
   }
-  size_t buf_size = 1 << 14;
-  auto buf = td::StackAllocator::alloc(buf_size);
-  td::StringBuilder sb(buf.as_slice());
 
   td::Slice id_filter;
   int new_verbosity_level = -1;
   td::string tag;
+  td::string format;
+  td::string action;
+  td::string client_id_str;
+  td::string webhook_url;
+  td::string secret_token;
+  td::string max_connections;
+  td::string allowed_updates;
+  bool drop_pending_updates = false;
+
   for (auto &arg : args) {
     if (arg.first == "id") {
       id_filter = arg.second;
-    }
-    if (arg.first == "v") {
+    } else if (arg.first == "v") {
       auto r_new_verbosity_level = td::to_integer_safe<int>(arg.second);
       if (r_new_verbosity_level.is_ok()) {
         new_verbosity_level = r_new_verbosity_level.ok();
       }
-    }
-    if (arg.first == "tag") {
+    } else if (arg.first == "tag") {
       tag = arg.second;
+    } else if (arg.first == "format") {
+      format = arg.second;
+    } else if (arg.first == "text" || arg.first == "tsv") {
+      format = "text";
+    } else if (arg.first == "json") {
+      format = "json";
+    } else if (arg.first == "action") {
+      action = arg.second;
+    } else if (arg.first == "client") {
+      client_id_str = arg.second;
+    } else if (arg.first == "url") {
+      webhook_url = arg.second;
+    } else if (arg.first == "secret_token") {
+      secret_token = arg.second;
+    } else if (arg.first == "max_connections") {
+      max_connections = arg.second;
+    } else if (arg.first == "allowed_updates") {
+      allowed_updates = arg.second;
+    } else if (arg.first == "drop_pending_updates") {
+      drop_pending_updates = arg.second == "1" || arg.second == "true" || arg.second == "on";
     }
   }
+
+  if (!action.empty()) {
+    if (!allow_actions) {
+      promise.set_error(td::Status::Error(405, "Stats actions require HTTP POST"));
+      return;
+    }
+    if (action != "logout_all" && action != "logout" && action != "set_webhook" && action != "delete_webhook") {
+      promise.set_error(td::Status::Error(400, "Unknown stats action"));
+      return;
+    }
+    if (action == "logout_all") {
+      for (auto id : clients_.ids()) {
+        auto *client_info = clients_.get(id);
+        if (client_info != nullptr) {
+          send_closure(client_info->client_, &Client::log_out_from_stats);
+        }
+      }
+      promise.set_value(make_stats_action_response("Logout requested for all bot sessions"));
+      return;
+    }
+
+    auto r_client_id = td::to_integer_safe<td::uint64>(client_id_str);
+    auto *client_info = r_client_id.is_ok() ? clients_.get(r_client_id.ok()) : nullptr;
+    if (client_info == nullptr) {
+      promise.set_error(td::Status::Error(404, "Bot session not found; refresh the dashboard"));
+      return;
+    }
+
+    if (action == "logout") {
+      send_closure(client_info->client_, &Client::log_out_from_stats);
+      promise.set_value(make_stats_action_response("Bot logout requested"));
+      return;
+    }
+
+    if (action == "set_webhook" || action == "delete_webhook") {
+      td::vector<std::pair<td::string, td::string>> query_args;
+      if (action == "set_webhook") {
+        if (webhook_url.empty()) {
+          promise.set_error(td::Status::Error(400, "Webhook URL is required"));
+          return;
+        }
+        query_args.emplace_back("url", webhook_url);
+        if (!secret_token.empty()) {
+          query_args.emplace_back("secret_token", secret_token);
+        }
+        if (!max_connections.empty()) {
+          query_args.emplace_back("max_connections", max_connections);
+        }
+        if (!allowed_updates.empty()) {
+          auto r_updates = td::json_decode(td::MutableSlice(allowed_updates));
+          if (r_updates.is_error() || r_updates.ok().type() != td::JsonValue::Type::Array) {
+            promise.set_error(td::Status::Error(400, "Allowed updates must be a JSON array of strings"));
+            return;
+          }
+          for (auto &update : r_updates.ok().get_array()) {
+            if (update.type() != td::JsonValue::Type::String) {
+              promise.set_error(td::Status::Error(400, "Allowed updates must be a JSON array of strings"));
+              return;
+            }
+          }
+          query_args.emplace_back("allowed_updates", td::json_encode<td::string>(r_updates.ok()));
+        }
+      }
+      if (drop_pending_updates) {
+        query_args.emplace_back("drop_pending_updates", "true");
+      }
+      auto method = action == "set_webhook" ? td::Slice("setWebhook") : td::Slice("deleteWebhook");
+      auto query_promise = td::PromiseCreator::lambda(
+          [promise = std::move(promise)](td::Result<td::unique_ptr<Query>> result) mutable {
+            if (result.is_error()) {
+              promise.set_error(result.move_as_error());
+              return;
+            }
+            auto query = result.move_as_ok();
+            promise.set_value(StatsResponse{std::move(query->answer()), "application/json; charset=utf-8",
+                                            query->http_status_code()});
+          });
+      td::Slice token = client_info->token_;
+      bool is_test_dc = td::ends_with(token, "/test");
+      if (is_test_dc) {
+        token.remove_suffix(5);
+      }
+      send_closure(client_info->client_, &Client::send,
+                   make_internal_query(token, method, query_args, parameters_->shared_data_, td::IPAddress(),
+                                       std::move(query_promise), is_test_dc));
+      return;
+    }
+  }
+
   if (new_verbosity_level > 0) {
     if (tag.empty()) {
       parameters_->shared_data_->next_verbosity_level_ = new_verbosity_level;
@@ -225,8 +343,98 @@ void ClientManager::get_stats(td::Promise<td::BufferSlice> promise,
     }
   }
 
+  if (format.empty()) {
+    promise.set_value(StatsResponse{td::BufferSlice(STATS_HTML), "text/html; charset=utf-8"});
+    return;
+  }
+
+  if (format != "json" && format != "text" && format != "tsv") {
+    promise.set_error(td::Status::Error(400, "Unsupported stats format"));
+    return;
+  }
   auto now = td::Time::now();
-  auto top_clients = get_top_clients(50, id_filter);
+  auto top_clients = get_top_clients(format == "json" ? clients_.size() : 50, id_filter);
+
+  if (format == "json") {
+    auto content = td::json_encode<td::BufferSlice>(td::json_object([&](auto &object) {
+      object("version", parameters_->version_);
+      object("uptime", static_cast<td::int64>(now - parameters_->start_time_));
+      object("bot_count", static_cast<td::int64>(clients_.size()));
+      object("active_bot_count", top_clients.active_count);
+      object("active_requests", static_cast<td::int64>(
+                                   parameters_->shared_data_->query_count_.load(std::memory_order_relaxed)));
+      object("active_webhook_connections", static_cast<td::int64>(WebhookActor::get_total_connection_count()));
+      object("active_network_queries",
+             static_cast<td::int64>(td::get_pending_network_query_count(*parameters_->net_query_stats_)));
+      object("default_max_webhook_connections", parameters_->default_max_webhook_connections_);
+      object("max_webhook_connections", parameters_->local_mode_ ? 100000 : 100);
+      object("mcp", td::json_object([&](auto &mcp) {
+        mcp("configured", td::JsonBool(!parameters_->shared_data_->mcp_bot_token_.empty() &&
+                                     !parameters_->shared_data_->mcp_chat_id_.empty()));
+        mcp("has_bearer", td::JsonBool(!parameters_->shared_data_->mcp_bearer_token_.empty()));
+      }));
+      auto r_mem_stat = td::mem_stat();
+      if (r_mem_stat.is_ok()) {
+        auto mem = r_mem_stat.move_as_ok();
+        object("memory", td::json_object([&](auto &memory) {
+          memory("rss", PSTRING() << td::format::as_size(mem.resident_size_));
+          memory("vm", PSTRING() << td::format::as_size(mem.virtual_size_));
+          memory("rss_peak", PSTRING() << td::format::as_size(mem.resident_size_peak_));
+          memory("vm_peak", PSTRING() << td::format::as_size(mem.virtual_size_peak_));
+        }));
+      }
+      object("bots", td::json_array([&](auto &bots) {
+        for (auto top_client_id : top_clients.top_client_ids) {
+          auto *client_info = clients_.get(top_client_id);
+          CHECK(client_info);
+          auto bot_info = client_info->client_.get_actor_unsafe()->get_bot_info();
+          td::string update_rate = "0.00";
+          td::string request_rate = "0.00";
+          for (auto &stat : client_info->stat_.as_vector(now)) {
+            if (stat.key_ == "update_count") {
+              update_rate = stat.value_;
+            } else if (stat.key_ == "request_count") {
+              request_rate = stat.value_;
+            }
+          }
+          bots(td::json_object([&](auto &bot) {
+            bot("id", bot_info.id_);
+            bot("client_id", td::to_string(top_client_id));
+            bot("username", bot_info.username_);
+            bot("uptime", static_cast<td::int64>(now - bot_info.start_time_));
+            bot("webhook", bot_info.webhook_);
+            bot("webhook_max_connections", bot_info.webhook_max_connections_);
+            bot("pending_updates", static_cast<td::int64>(bot_info.pending_update_count_));
+            bot("active_requests", client_info->stat_.get_active_request_count());
+            bot("update_rate", update_rate);
+            bot("request_rate", request_rate);
+          }));
+        }
+      }));
+      object("diagnostics", td::json_array([&](auto &diagnostics) {
+        auto add_diag = [&](td::Slice name, td::Slice value) {
+          diagnostics(td::json_object([&](auto &diagnostic) {
+            diagnostic("name", name);
+            diagnostic("value", value);
+          }));
+        };
+        for (auto &stat : ServerCpuStat::instance().as_vector(now)) {
+          add_diag(stat.key_, stat.value_);
+        }
+        add_diag("buffer_memory", PSTRING() << td::format::as_size(td::BufferAllocator::get_buffer_mem()));
+        for (auto &stat : stat_.as_vector(now)) {
+          add_diag(stat.key_, stat.value_);
+        }
+      }));
+    }));
+    promise.set_value(StatsResponse{std::move(content)});
+    return;
+  }
+
+  size_t buf_size = 1 << 14;
+  auto buf = td::StackAllocator::alloc(buf_size);
+  td::StringBuilder sb(buf.as_slice());
+
   sb << BotStatActor::get_description() << '\n';
   if (id_filter.empty()) {
     sb << "uptime\t" << now - parameters_->start_time_ << '\n';
@@ -269,7 +477,6 @@ void ClientManager::get_stats(td::Promise<td::BufferSlice> promise,
     sb << '\n';
     sb << "id\t" << bot_info.id_ << '\n';
     sb << "uptime\t" << now - bot_info.start_time_ << '\n';
-    sb << "token\t" << bot_info.token_ << '\n';
     sb << "username\t" << bot_info.username_ << '\n';
     if (active_request_count != 0) {
       sb << "active_request_count\t" << active_request_count << '\n';
@@ -307,7 +514,7 @@ void ClientManager::get_stats(td::Promise<td::BufferSlice> promise,
     }
   }
   // ignore sb overflow
-  promise.set_value(td::BufferSlice(sb.as_cslice()));
+  promise.set_value(StatsResponse{td::BufferSlice(sb.as_cslice()), "text/plain; charset=utf-8"});
 }
 
 td::int64 ClientManager::get_tqueue_id(td::int64 user_id, bool is_test_dc) {
@@ -382,15 +589,6 @@ void ClientManager::start_up() {
 
 PromisedQueryPtr ClientManager::get_webhook_restore_query(td::Slice token, td::Slice webhook_info,
                                                           std::shared_ptr<SharedData> shared_data) {
-  // create Query with empty promise
-  td::vector<td::BufferSlice> containers;
-  auto add_string = [&containers](td::Slice str) {
-    containers.emplace_back(str);
-    return containers.back().as_mutable_slice();
-  };
-
-  token = add_string(token);
-
   LOG(WARNING) << "WEBHOOK: " << token << " ---> " << webhook_info;
 
   bool is_test_dc = false;
@@ -400,43 +598,38 @@ PromisedQueryPtr ClientManager::get_webhook_restore_query(td::Slice token, td::S
   }
 
   td::ConstParser parser{webhook_info};
-  td::vector<std::pair<td::MutableSlice, td::MutableSlice>> args;
+  td::vector<std::pair<td::string, td::string>> args;
   if (parser.try_skip("cert/")) {
-    args.emplace_back(add_string("certificate"), add_string("previous"));
+    args.emplace_back("certificate", "previous");
   }
 
   if (parser.try_skip("#maxc")) {
-    args.emplace_back(add_string("max_connections"), add_string(parser.read_till('/')));
+    args.emplace_back("max_connections", parser.read_till('/').str());
     parser.skip('/');
   }
 
   if (parser.try_skip("#ip")) {
-    args.emplace_back(add_string("ip_address"), add_string(parser.read_till('/')));
+    args.emplace_back("ip_address", parser.read_till('/').str());
     parser.skip('/');
   }
 
   if (parser.try_skip("#fix_ip")) {
-    args.emplace_back(add_string("fix_ip_address"), add_string("1"));
+    args.emplace_back("fix_ip_address", "1");
     parser.skip('/');
   }
 
   if (parser.try_skip("#secret")) {
-    args.emplace_back(add_string("secret_token"), add_string(parser.read_till('/')));
+    args.emplace_back("secret_token", parser.read_till('/').str());
     parser.skip('/');
   }
 
   if (parser.try_skip("#allow")) {
-    args.emplace_back(add_string("allowed_updates"), add_string(parser.read_till('/')));
+    args.emplace_back("allowed_updates", parser.read_till('/').str());
     parser.skip('/');
   }
 
-  args.emplace_back(add_string("url"), add_string(parser.read_all()));
-
-  const auto method = add_string("setwebhook");
-  auto query = td::make_unique<Query>(std::move(containers), token, is_test_dc, method, std::move(args),
-                                      td::vector<std::pair<td::MutableSlice, td::MutableSlice>>(),
-                                      td::vector<td::HttpFile>(), std::move(shared_data), td::IPAddress(), true);
-  return PromisedQueryPtr(query.release(), PromiseDeleter(td::Promise<td::unique_ptr<Query>>()));
+  args.emplace_back("url", parser.read_all().str());
+  return make_internal_query(token, "setWebhook", args, std::move(shared_data), td::IPAddress(), {}, is_test_dc, true);
 }
 
 void ClientManager::dump_statistics() {
