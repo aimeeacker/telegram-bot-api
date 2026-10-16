@@ -36,7 +36,8 @@ class McpHttpTest(unittest.TestCase):
         temp_dir.mkdir(parents=True, exist_ok=True)
         cls.server = subprocess.Popen(
             [BINARY, "--api-id=1", "--api-hash=" + "0" * 32,
-             "--http-ip-address=127.0.0.1", f"--http-port={cls.port}", "--http-stat-port=0",
+             "--http-ip-address=127.0.0.1", f"--http-port={cls.port}",
+             "--preset-bots=123456:secret-token-123456",
              f"--dir={data_dir}", f"--temp-dir={temp_dir}"],
             env=env, stdout=cls.log, stderr=subprocess.STDOUT,
         )
@@ -59,6 +60,16 @@ class McpHttpTest(unittest.TestCase):
         except subprocess.TimeoutExpired:
             cls.server.kill()
             cls.server.wait()
+
+    def get_request(self, path):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            payload = response.read()
+            return response.status, response.headers, payload
+        finally:
+            connection.close()
 
     def request(self, body, headers=None, path="/mcp"):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -156,6 +167,96 @@ class McpHttpTest(unittest.TestCase):
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["result"]["protocolVersion"], LEGACY)
         self.assertEqual(self.request('{"jsonrpc":"2.0","method":"notifications/initialized"}'), (202, None))
+
+    def test_tools_list_schema(self):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        status, payload = self.request(body)
+        self.assertEqual(status, 200, payload)
+        names = [tool["name"] for tool in payload["result"]["tools"]]
+        self.assertEqual(names, ["sendMessage", "editMessageText", "getUpdates", "setWebhook"])
+
+    def test_mcp_get_updates(self):
+        # Unexpected argument
+        self.assert_error(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "getUpdates", "arguments": {"invalid": 123}}}),
+            -32602,
+        )
+        # Timeout out of bounds
+        self.assert_error(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "getUpdates", "arguments": {"timeout": 999}}}),
+            -32602,
+        )
+        # Valid parameters (and alias poll_updates)
+        for name in ["getUpdates", "poll_updates"]:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                               "params": {"name": name, "arguments": {"limit": 10, "timeout": 20}}})
+            status, payload = self.request(body)
+            self.assertEqual(status, 200, payload)
+            self.assertTrue(payload["result"]["isError"])
+            self.assertIn("MCP Telegram bridge is not configured", payload["result"]["content"][0]["text"])
+
+    def test_mcp_set_webhook_validation(self):
+        # Domain name rejected
+        for url in ["http://example.com/webhook", "https://api.mybot.org/hook", "http://localhost:8080/hook"]:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                               "params": {"name": "setWebhook", "arguments": {"url": url}}})
+            status, payload = self.request(body)
+            self.assertEqual(status, 400, payload)
+            self.assertEqual(payload["error"]["code"], -32602)
+            self.assertIn("domain names are not allowed", payload["error"]["message"])
+
+        # Public IP rejected
+        for url in ["http://8.8.8.8/webhook", "https://1.1.1.1:8443/webhook"]:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                               "params": {"name": "setWebhook", "arguments": {"url": url}}})
+            status, payload = self.request(body)
+            self.assertEqual(status, 400, payload)
+            self.assertEqual(payload["error"]["code"], -32602)
+            self.assertIn("private/reserved IP", payload["error"]["message"])
+
+        # Private IP accepted (both http and https)
+        for url in ["http://127.0.0.1:8080/webhook", "https://192.168.1.100:8443/hook", "http://10.0.0.1/hook"]:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                               "params": {"name": "setWebhook", "arguments": {"url": url}}})
+            status, payload = self.request(body)
+            self.assertEqual(status, 200, payload)
+            self.assertTrue(payload["result"]["isError"])
+            self.assertIn("MCP Telegram bridge is not configured", payload["result"]["content"][0]["text"])
+
+        # Empty URL (deleteWebhook) accepted
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "setWebhook", "arguments": {"url": ""}}})
+        status, payload = self.request(body)
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload["result"]["isError"])
+        self.assertIn("MCP Telegram bridge is not configured", payload["result"]["content"][0]["text"])
+
+    def test_stats_and_root_redirect(self):
+        status, headers, _ = self.get_request("/")
+        self.assertEqual(status, 302)
+        self.assertEqual(headers.get("Location"), "/stats")
+
+        status, _, payload = self.get_request("/stats?format=json")
+        self.assertEqual(status, 200)
+        data = json.loads(payload)
+        self.assertIn("version", data)
+
+    def test_preset_bot_resolution(self):
+        # 999999 is not preset -> rejected with 401 Unauthorized
+        status_unauth, _, payload_unauth = self.get_request("/bot999999/close")
+        self.assertEqual(status_unauth, 401)
+        err = json.loads(payload_unauth)
+        self.assertFalse(err["ok"])
+        self.assertEqual(err["error_code"], 401)
+
+        # 123456 is preset -> token resolved, reaches ClientManager, which responds with 400 bot already closed
+        status, _, payload = self.get_request("/bot123456/close")
+        self.assertEqual(status, 400)
+        res = json.loads(payload)
+        self.assertFalse(res["ok"])
+        self.assertIn("already been closed", res["description"])
 
 
 if __name__ == "__main__":

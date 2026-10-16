@@ -2,6 +2,9 @@
 # Keep the original MCP body so that HttpConnection can validate the whole request.
 # Generate an overlay in the build directory without modifying the TDLib checkout.
 function(telegram_bot_api_preserve_mcp_json)
+  if (NOT TARGET tdnet)
+    return()
+  endif()
   get_target_property(tdnet_source_dir tdnet SOURCE_DIR)
   set(http_reader_path "${tdnet_source_dir}/td/net/HttpReader.cpp")
   file(READ "${http_reader_path}" http_reader)

@@ -1,10 +1,6 @@
 name: Build and Publish Telegram Bot API
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
   workflow_dispatch:
     inputs:
       mode:
@@ -17,45 +13,109 @@ on:
           - ubuntu
           - docker
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 concurrency:
-  group: telegram-bot-api-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'auto' }}
+  group: telegram-bot-api-${{ github.workflow }}-${{ github.ref }}-${{ inputs.mode }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'all' || inputs.mode == 'ubuntu' }}
+    if: ${{ inputs.mode == 'all' || inputs.mode == 'ubuntu' }}
     name: Build linux x86_64 binary
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
     permissions:
       contents: read
 
     steps:
       - name: Clean runner space
-        uses: mathio/gha-cleanup@v1
-        with:
-          remove-browsers: true
-          verbose: false
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get autoremove -y > /dev/null 2>&1 || true
+          sudo apt-get clean > /dev/null 2>&1 || true
 
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          submodules: recursive
           persist-credentials: false
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            make git zlib1g-dev libssl-dev gperf cmake g++
+            make git zlib1g-dev libssl-dev cmake g++
+
+      - name: Fetch and verify precompiled TDLib (glibc)
+        run: |
+          TD_COMMIT=$(git rev-parse :td)
+          TAG_NAME="tdlib-${TD_COMMIT:0:7}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}"
+          ASSET_NAME="tdlib-x86_64-linux-glibc.tar.gz"
+
+          echo "Checking precompiled release asset for ${TAG_NAME}..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L -I "${BASE_URL}/${ASSET_NAME}")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error ::Precompiled TDLib (glibc) asset not found at ${BASE_URL}/${ASSET_NAME} (HTTP ${HTTP_STATUS})! Prebuilt TDLib is required. Please run 'Prebuild TDLib Static Libraries' workflow first."
+            exit 1
+          fi
+
+          mkdir -p /tmp/tdlib-verify tdlib-prebuilt
+          echo "Downloading ${ASSET_NAME}..."
+          if ! curl -sSL -f -o "/tmp/tdlib-verify/${ASSET_NAME}" "${BASE_URL}/${ASSET_NAME}"; then
+            echo "::error ::Failed to download ${ASSET_NAME} from ${BASE_URL}."
+            exit 1
+          fi
+
+          echo "Downloading SHA256SUMS.txt..."
+          if ! curl -sSL -f -o "/tmp/tdlib-verify/SHA256SUMS.txt" "${BASE_URL}/SHA256SUMS.txt"; then
+            echo "::error ::Failed to download SHA256SUMS.txt from ${BASE_URL}."
+            exit 1
+          fi
+
+          cd /tmp/tdlib-verify
+          echo "Verifying SHA-256 checksum..."
+          if ! grep "${ASSET_NAME}" SHA256SUMS.txt | sha256sum --check --status; then
+            echo "::error ::SHA-256 checksum verification failed for ${ASSET_NAME}! Potential file corruption or tampering."
+            exit 1
+          fi
+          echo "SHA-256 checksum verified successfully."
+          cd -
+
+          echo "Extracting ${ASSET_NAME}..."
+          if ! tar -xzf "/tmp/tdlib-verify/${ASSET_NAME}" -C tdlib-prebuilt; then
+            echo "::error ::Failed to extract ${ASSET_NAME}."
+            exit 1
+          fi
+
+          REQUIRED_FILES=(
+            "tdlib-prebuilt/MANIFEST.json"
+            "tdlib-prebuilt/include/td/actor/actor.h"
+            "tdlib-prebuilt/include/td/utils/Slice.h"
+            "tdlib-prebuilt/include/td/tl/TlObject.h"
+            "tdlib-prebuilt/include/td/telegram/td_api.h"
+            "tdlib-prebuilt/include/memprof/memprof.h"
+            "tdlib-prebuilt/lib/libtdactor.a"
+            "tdlib-prebuilt/lib/libtdcore.a"
+            "tdlib-prebuilt/lib/libtddb.a"
+            "tdlib-prebuilt/lib/libtdnet.a"
+            "tdlib-prebuilt/lib/libtdutils.a"
+            "tdlib-prebuilt/lib/libmemprof.a"
+          )
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error ::Sanity check failed: missing required artifact $file"
+              exit 1
+            fi
+          done
+
+          echo "Precompiled TDLib manifest:"
+          cat tdlib-prebuilt/MANIFEST.json
 
       - name: Configure Release build
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_PREBUILT_TDLIB=ON \
+            -DPREBUILT_TDLIB_DIR="${{ github.workspace }}/tdlib-prebuilt" \
             -DCMAKE_INSTALL_PREFIX:PATH="${{ github.workspace }}/dist"
 
       - name: Build and install
@@ -80,25 +140,24 @@ jobs:
           retention-days: 14
 
   docker:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'all' || inputs.mode == 'docker' }}
+    if: ${{ inputs.mode == 'all' || inputs.mode == 'docker' }}
     name: Publish OpenWrt x86_64 image
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
 
     steps:
       - name: Clean runner space
-        uses: mathio/gha-cleanup@v1
-        with:
-          remove-browsers: true
-          verbose: false
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo apt-get autoremove -y > /dev/null 2>&1 || true
+          sudo apt-get clean > /dev/null 2>&1 || true
 
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          submodules: recursive
           persist-credentials: false
 
       - name: Resolve GHCR image name
@@ -117,15 +176,80 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
             type=sha,prefix=sha-
-            type=ref,event=pr
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch and verify precompiled TDLib (musl)
+        run: |
+          TD_COMMIT=$(git rev-parse :td)
+          TAG_NAME="tdlib-${TD_COMMIT:0:7}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}"
+          ASSET_NAME="tdlib-x86_64-linux-musl.tar.gz"
+
+          echo "Checking precompiled release asset for ${TAG_NAME}..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L -I "${BASE_URL}/${ASSET_NAME}")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error ::Precompiled TDLib (musl) asset not found at ${BASE_URL}/${ASSET_NAME} (HTTP ${HTTP_STATUS})! Prebuilt TDLib is required. Please run 'Prebuild TDLib Static Libraries' workflow first."
+            exit 1
+          fi
+
+          mkdir -p /tmp/tdlib-verify
+          echo "Downloading ${ASSET_NAME}..."
+          if ! curl -sSL -f -o "/tmp/tdlib-verify/${ASSET_NAME}" "${BASE_URL}/${ASSET_NAME}"; then
+            echo "::error ::Failed to download ${ASSET_NAME}."
+            exit 1
+          fi
+
+          echo "Downloading SHA256SUMS.txt..."
+          if ! curl -sSL -f -o "/tmp/tdlib-verify/SHA256SUMS.txt" "${BASE_URL}/SHA256SUMS.txt"; then
+            echo "::error ::Failed to download SHA256SUMS.txt."
+            exit 1
+          fi
+
+          cd /tmp/tdlib-verify
+          echo "Verifying SHA-256 checksum..."
+          if ! grep "${ASSET_NAME}" SHA256SUMS.txt | sha256sum --check --status; then
+            echo "::error ::SHA-256 checksum verification failed for ${ASSET_NAME}!"
+            exit 1
+          fi
+          echo "SHA-256 checksum verified successfully."
+          cd -
+
+          # Copy verified tarball into workspace for Docker build context
+          cp "/tmp/tdlib-verify/${ASSET_NAME}" ./tdlib-musl.tar.gz
+
+          # Perform sanity check in temporary directory
+          mkdir -p /tmp/tdlib-musl-sanity
+          tar -xzf ./tdlib-musl.tar.gz -C /tmp/tdlib-musl-sanity
+          REQUIRED_FILES=(
+            "/tmp/tdlib-musl-sanity/MANIFEST.json"
+            "/tmp/tdlib-musl-sanity/include/td/actor/actor.h"
+            "/tmp/tdlib-musl-sanity/include/td/utils/Slice.h"
+            "/tmp/tdlib-musl-sanity/include/td/tl/TlObject.h"
+            "/tmp/tdlib-musl-sanity/include/td/telegram/td_api.h"
+            "/tmp/tdlib-musl-sanity/include/memprof/memprof.h"
+            "/tmp/tdlib-musl-sanity/lib/libtdactor.a"
+            "/tmp/tdlib-musl-sanity/lib/libtdcore.a"
+            "/tmp/tdlib-musl-sanity/lib/libtddb.a"
+            "/tmp/tdlib-musl-sanity/lib/libtdnet.a"
+            "/tmp/tdlib-musl-sanity/lib/libtdutils.a"
+            "/tmp/tdlib-musl-sanity/lib/libmemprof.a"
+          )
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error ::Sanity check failed for musl bundle: missing $file"
+              exit 1
+            fi
+          done
+
+          echo "Precompiled musl manifest:"
+          cat /tmp/tdlib-musl-sanity/MANIFEST.json
+          rm -rf /tmp/tdlib-musl-sanity
 
       - name: Build and publish linux/amd64 image
         uses: docker/build-push-action@v7
@@ -135,10 +259,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             BUILD_JOBS=4
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           provenance: false
           sbom: false

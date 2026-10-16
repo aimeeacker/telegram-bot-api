@@ -2,13 +2,21 @@ cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
 
 project(TelegramBotApi VERSION 10.3 LANGUAGES CXX)
 
-add_subdirectory(td EXCLUDE_FROM_ALL)
-include(CMake/RawMcpJson.cmake)
+option(USE_PREBUILT_TDLIB "Use precompiled TDLib static libraries" ON)
+set(PREBUILT_TDLIB_DIR "" CACHE PATH "Path to precompiled TDLib directory")
+
+if (NOT USE_PREBUILT_TDLIB OR NOT EXISTS "${PREBUILT_TDLIB_DIR}/include/td/actor/actor.h")
+  message(FATAL_ERROR "Precompiled TDLib is required! Please provide a valid prebuilt directory via -DUSE_PREBUILT_TDLIB=ON -DPREBUILT_TDLIB_DIR=<path>")
+endif()
 
 if (NOT DEFINED CMAKE_MODULE_PATH)
   set(CMAKE_MODULE_PATH "")
 endif()
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/td/CMake" "${CMAKE_MODULE_PATH}")
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" "${CMAKE_MODULE_PATH}")
+
+if (TARGET tdnet)
+  include(CMake/RawMcpJson.cmake)
+endif()
 
 if (NOT DEFINED CMAKE_INSTALL_BINDIR)
   set(CMAKE_INSTALL_BINDIR "bin")
@@ -66,7 +74,6 @@ set(TELEGRAM_BOT_API_SOURCE
   telegram-bot-api/Client.cpp
   telegram-bot-api/ClientManager.cpp
   telegram-bot-api/HttpConnection.cpp
-  telegram-bot-api/HttpStatConnection.cpp
   telegram-bot-api/Query.cpp
   telegram-bot-api/Stats.cpp
   telegram-bot-api/Watchdog.cpp
@@ -77,7 +84,6 @@ set(TELEGRAM_BOT_API_SOURCE
   telegram-bot-api/ClientParameters.h
   telegram-bot-api/HttpConnection.h
   telegram-bot-api/HttpServer.h
-  telegram-bot-api/HttpStatConnection.h
   telegram-bot-api/Query.h
   telegram-bot-api/Stats.h
   telegram-bot-api/Watchdog.h
@@ -93,8 +99,31 @@ configure_file(
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/telegram-bot-api/stats.html")
 
 add_executable(telegram-bot-api ${TELEGRAM_BOT_API_SOURCE})
-target_include_directories(telegram-bot-api PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}> "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(telegram-bot-api PRIVATE memprof tdactor tdcore tddb tdnet tdutils)
+message(STATUS "Using precompiled TDLib from: ${PREBUILT_TDLIB_DIR}")
+target_include_directories(telegram-bot-api PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  "${PREBUILT_TDLIB_DIR}/include"
+)
+
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB REQUIRED)
+
+file(GLOB PREBUILT_TDLIB_LIBS "${PREBUILT_TDLIB_DIR}/lib/*.a")
+if (NOT PREBUILT_TDLIB_LIBS)
+  message(FATAL_ERROR "No static libraries found in ${PREBUILT_TDLIB_DIR}/lib")
+endif()
+
+target_link_libraries(telegram-bot-api PRIVATE
+  -Wl,--start-group
+  ${PREBUILT_TDLIB_LIBS}
+  -Wl,--end-group
+  OpenSSL::Crypto
+  OpenSSL::SSL
+  ZLIB::ZLIB
+  Threads::Threads
+  ${CMAKE_DL_LIBS}
+)
 
 install(TARGETS telegram-bot-api RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 if (MSVC AND VCPKG_TOOLCHAIN)

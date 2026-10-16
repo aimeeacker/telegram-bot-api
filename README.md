@@ -10,8 +10,9 @@ Please note that only global Bot API issues that affect all bots are suitable fo
 
 This repository tracks upstream `tdlib/telegram-bot-api` and currently includes **Bot API 10.3** plus a small set of self-hosting features:
 
-1. **Operations Dashboard (`:8082/stats`)**
+1. **Operations Dashboard (`:8081/stats`)**
    * Responsive dark dashboard with server health, memory, request activity, bot uptime, pending updates, delivery mode, and collapsible diagnostics.
+   * Migrated to `:8081/stats` (with root `:8081/` redirecting to `/stats`), completely removing the separate 8082 listener.
    * Bot tokens are never rendered in HTML, action URLs, or the legacy text/TSV stats view.
    * Per-bot controls support logout, setting/updating a webhook URL, optional secret token, max connections, allowed updates, dropping pending updates, and switching back to polling.
    * A `Logout all` action is available for terminating every active local bot session.
@@ -19,10 +20,20 @@ This repository tracks upstream `tdlib/telegram-bot-api` and currently includes 
    * Stats responses use `Cache-Control: no-store` and related browser hardening headers.
    * The original text stats format remains available with `format=text`, `text=1`, or `tsv=1`.
 
-2. **Built-in MCP endpoint (`:8081/mcp`)**
+2. **Preset Bots (`TELEGRAM_PRESET_BOTS` / `--preset-bots`)**
+   * Pre-configure known bots via environment variable `TELEGRAM_PRESET_BOTS=123456:secret-token-123456,...` or CLI option `--preset-bots`.
+   * Downstream callers can send requests using `bot_id` instead of the full token (e.g. `/bot123456/getMe`), eliminating token leakage across downstream services.
+   * The server transparently resolves `bot_id` to the full token internally.
+   * `TELEGRAM_MCP_BOT_TOKEN` is automatically registered in preset bots.
+
+3. **Built-in MCP endpoint (`:8081/mcp`)**
    * Implements stateless JSON-over-HTTP MCP with current `2026-07-28` discovery/tool calls and compatibility with `2025-11-25` initialization clients.
-   * Exposes exactly two tools: `send_message` and `edit_message`.
-   * The default Telegram bot and destination chat are configured with environment variables. Clients cannot override them or read the bot token; successful message results include Telegram's usual message and chat metadata.
+   * Exposes native tools matching Telegram Bot API methods:
+     - `sendMessage`: Send a text message to the server-configured chat (supports Markdown/HTML parse mode, silent send).
+     - `editMessageText`: Edit a previously sent message in the server-configured chat.
+     - `getUpdates`: Receive incoming updates via long polling.
+     - `setWebhook`: Set a webhook URL to receive updates (or empty string `""` to delete webhook). Restricted exclusively to private/reserved IP addresses (RFC 1918 / loopback); domain names are strictly forbidden; HTTP and HTTPS are both permitted without requiring certificates.
+     - Backwards-compatible aliases (`send_message`, `edit_message`, `poll_updates`, `set_webhook`) are supported in tool invocations.
    * Optional bearer authentication can protect the MCP endpoint.
 
    Environment variables:
@@ -30,6 +41,8 @@ This repository tracks upstream `tdlib/telegram-bot-api` and currently includes 
    ```sh
    TELEGRAM_MCP_BOT_TOKEN=123456:bot-token
    TELEGRAM_MCP_CHAT_ID=-1001234567890
+   # Optional: preset bots for downstream bot_id routing
+   TELEGRAM_PRESET_BOTS=123456:bot-token,654321:another-token
    # Optional but recommended when /mcp is reachable by untrusted clients:
    TELEGRAM_MCP_BEARER_TOKEN=change-me
    ```
@@ -38,16 +51,15 @@ This repository tracks upstream `tdlib/telegram-bot-api` and currently includes 
 
    For compatibility with older clients, omitted `_meta` fields and mirrored headers are accepted; supplied values are validated. The JSON body must still contain exactly one complete request object.
 
-3. **Self-hosting defaults**
+4. **Self-hosting defaults**
    * Zero-argument runtime defaults remain optimized for the local deployment used by this fork:
-     - `--http-port=8081`
-     - `--http-stat-port=8082`
+     - `--http-port=8081` (single unified port for Bot API, `/stats`, and `/mcp`)
      - `--http-ip-address=0.0.0.0`
      - `--dir=/opt/telegram-bot-api-data` (or `$TELEGRAM_WORK_DIR`)
      - `--temp-dir=/tmp/telegram-bot-api` (or `$TELEGRAM_TEMP_DIR`)
      - `--local`
 
-4. **GitHub Actions build + GHCR image**
+5. **GitHub Actions build + GHCR image**
    * Release build on Ubuntu 24.04 with recursive TDLib checkout, binary verification, and an uploaded Linux x86_64 artifact.
    * The Ubuntu/glibc x86_64 artifact remains unchanged. The Docker image is built independently with Alpine/musl in a multi-stage build, compiled with `-j4`, stripped, and published as a compact `linux/amd64` image suitable for Docker on OpenWrt x86_64 hosts.
    * Published tags include `latest` and an immutable `sha-<commit>` tag. Pull requests build the image for validation but do not publish it.
@@ -57,11 +69,12 @@ This repository tracks upstream `tdlib/telegram-bot-api` and currently includes 
    ```sh
    docker pull ghcr.io/aimeeacker/telegram-bot-api:latest
    docker run -d --name telegram-bot-api --restart unless-stopped \
-     -p 8081:8081 -p 8082:8082 \
+     -p 8081:8081 \
      -e TELEGRAM_API_ID=YOUR_API_ID \
      -e TELEGRAM_API_HASH=YOUR_API_HASH \
      -e TELEGRAM_MCP_BOT_TOKEN=YOUR_BOT_TOKEN \
      -e TELEGRAM_MCP_CHAT_ID=YOUR_CHAT_ID \
+     -e TELEGRAM_PRESET_BOTS=YOUR_BOT_ID:YOUR_BOT_TOKEN \
      -v telegram-bot-api-data:/opt/telegram-bot-api-data \
      ghcr.io/aimeeacker/telegram-bot-api:latest
    ```

@@ -20,6 +20,7 @@
 #include <atomic>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 
 namespace td {
 class NetQueryStats;
@@ -32,6 +33,18 @@ struct SharedData {
   td::string mcp_bot_token_;
   td::string mcp_chat_id_;
   td::string mcp_bearer_token_;
+
+  // Preset bots mapping: bot_id -> full_token (e.g. "8305356866" -> "8305356866:AAH_xxx").
+  // Populated at startup from TELEGRAM_PRESET_BOTS and TELEGRAM_MCP_BOT_TOKEN; read-only during execution.
+  std::unordered_map<td::string, td::string> preset_bots_;
+
+  const td::string *find_preset_bot(td::Slice bot_id) const {
+    auto it = preset_bots_.find(bot_id.str());
+    if (it != preset_bots_.end()) {
+      return &it->second;
+    }
+    return nullptr;
+  }
 
   std::atomic<td::uint64> query_count_{0};
   std::atomic<size_t> query_list_size_{0};
