@@ -51,6 +51,10 @@ class HttpConnection final : public td::HttpInboundConnection::Callback {
   td::Promise<td::unique_ptr<Query>> make_query_promise();
   void on_query_finished(td::Result<td::unique_ptr<Query>> r_query);
 
+  void handle_stats(td::unique_ptr<td::HttpQuery> http_query);
+  void on_stats_result(td::Result<ClientManager::StatsResponse> result);
+  void send_redirect(int http_status_code, td::CSlice location);
+
   void send_response(int http_status_code, td::BufferSlice &&content, int retry_after);
   void send_http_error(int http_status_code, td::CSlice description);
   void send_mcp_result(td::Slice result);

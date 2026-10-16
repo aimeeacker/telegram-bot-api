@@ -8,17 +8,25 @@ WORKDIR /usr/src/telegram-bot-api
 RUN apk add --no-cache \
       alpine-sdk \
       linux-headers \
-      git \
       zlib-dev \
       openssl-dev \
-      gperf \
       cmake
 
 COPY . .
 
 ARG BUILD_JOBS=4
-RUN cmake -S . -B build \
+
+RUN if [ ! -f tdlib-musl.tar.gz ]; then \
+      echo "Error: tdlib-musl.tar.gz is required to build telegram-bot-api!" && exit 1; \
+    fi && \
+    mkdir -p /opt/tdlib-prebuilt && \
+    tar -xzf tdlib-musl.tar.gz -C /opt/tdlib-prebuilt && \
+    echo "Using precompiled TDLib:" && \
+    cat /opt/tdlib-prebuilt/MANIFEST.json && \
+    cmake -S . -B build \
       -DCMAKE_BUILD_TYPE=Release \
+      -DUSE_PREBUILT_TDLIB=ON \
+      -DPREBUILT_TDLIB_DIR=/opt/tdlib-prebuilt \
       -DCMAKE_INSTALL_PREFIX:PATH=/opt/telegram-bot-api \
  && cmake --build build --target install -j "${BUILD_JOBS}" \
  && strip --strip-unneeded /opt/telegram-bot-api/bin/telegram-bot-api
@@ -46,7 +54,7 @@ COPY --from=build --chown=telegram:telegram /opt/telegram-bot-api/bin/telegram-b
 
 USER telegram
 
-EXPOSE 8081/tcp 8082/tcp
+EXPOSE 8081/tcp
 VOLUME ["/opt/telegram-bot-api-data"]
 
 ENTRYPOINT ["/usr/local/bin/telegram-bot-api"]
