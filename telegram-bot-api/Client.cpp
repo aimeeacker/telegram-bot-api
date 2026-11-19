@@ -7429,6 +7429,16 @@ class Client::TdOnEditMessageCallback final : public TdQueryCallback {
     answer_query(JsonMessage(message_info, false, "edited message", client_), std::move(query_));
   }
 
+  bool has_timeout() const final {
+    return true;
+  }
+
+  void on_timeout() final {
+    if (query_ != nullptr) {
+      fail_query_timeout(std::move(query_));
+    }
+  }
+
  private:
   const Client *client_;
   PromisedQueryPtr query_;
@@ -7446,6 +7456,16 @@ class Client::TdOnEditInlineMessageCallback final : public TdQueryCallback {
 
     CHECK(result->get_id() == td_api::ok::ID);
     answer_query(td::JsonTrue(), std::move(query_));
+  }
+
+  bool has_timeout() const final {
+    return true;
+  }
+
+  void on_timeout() final {
+    if (query_ != nullptr) {
+      fail_query_timeout(std::move(query_));
+    }
   }
 
  private:
@@ -7478,6 +7498,16 @@ class Client::TdOnStopPollCallback final : public TdQueryCallback {
         std::move(query_));
   }
 
+  bool has_timeout() const final {
+    return true;
+  }
+
+  void on_timeout() final {
+    if (query_ != nullptr) {
+      fail_query_timeout(std::move(query_));
+    }
+  }
+
  private:
   const Client *client_;
   int64 chat_id_;
@@ -7507,6 +7537,16 @@ class Client::TdOnStopBusinessPollCallback final : public TdQueryCallback {
     answer_query(
         JsonPoll(message_poll->poll_.get(), message_poll->description_.get(), message_poll->media_.get(), client_),
         std::move(query_));
+  }
+
+  bool has_timeout() const final {
+    return true;
+  }
+
+  void on_timeout() final {
+    if (query_ != nullptr) {
+      fail_query_timeout(std::move(query_));
+    }
   }
 
  private:
@@ -7587,6 +7627,16 @@ class Client::TdOnOkQueryCallback final : public TdQueryCallback {
 
     CHECK(result->get_id() == td_api::ok::ID);
     answer_query(td::JsonTrue(), std::move(query_));
+  }
+
+  bool has_timeout() const final {
+    return true;
+  }
+
+  void on_timeout() final {
+    if (query_ != nullptr) {
+      fail_query_timeout(std::move(query_));
+    }
   }
 
  private:
@@ -8998,6 +9048,11 @@ void Client::update_last_synchronization_error_date() {
   last_synchronization_error_date_ = get_unix_time();
 }
 
+void Client::log_out_from_stats() {
+  clear_tqueue_ = true;
+  log_out(0, td::Slice());
+}
+
 ServerBotInfo Client::get_bot_info() const {
   ServerBotInfo res;
   res.id_ = bot_token_id_;
@@ -9111,7 +9166,19 @@ void Client::send(PromisedQueryPtr query) {
       }
     }
   }
-  cmd_queue_.emplace(std::move(query));
+  if (query->method() == "getupdates") {
+    cmd_queue_.emplace(std::make_shared<PromisedQueryPtr>(std::move(query)));
+    return loop();
+  }
+
+  auto queued = std::make_shared<PromisedQueryPtr>(std::move(query));
+  cmd_queue_.emplace(queued);
+
+  wait_for(QUERY_TIMEOUT, [queued](Client *) {
+    if (*queued != nullptr) {
+      fail_query_timeout(std::move(*queued));
+    }
+  });
   loop();
 }
 
@@ -9122,9 +9189,11 @@ void Client::raw_event(const td::Event::Raw &event) {
 void Client::loop() {
   if (was_authorized_ || logging_out_ || closing_) {
     while (!cmd_queue_.empty()) {
-      auto query = std::move(cmd_queue_.front());
+      auto queued = std::move(cmd_queue_.front());
       cmd_queue_.pop();
-      on_cmd(std::move(query));
+      if (*queued != nullptr) {
+        on_cmd(std::move(*queued));
+      }
     }
   }
 }
@@ -9830,6 +9899,15 @@ void Client::do_send_request(object_ptr<td_api::Function> &&f, td::unique_ptr<Td
   CHECK(!td_client_.empty());
   auto id = handlers_.create(std::move(handler));
   send_closure(td_client_, &td::ClientActor::request, id, std::move(f));
+
+  wait_for(QUERY_TIMEOUT, [id](Client *client) {
+    auto *handler_ptr = client->handlers_.get(id);
+    if (handler_ptr != nullptr && (*handler_ptr)->has_timeout()) {
+      auto h = std::move(*handler_ptr);
+      client->handlers_.erase(id);
+      h->on_timeout();
+    }
+  });
 }
 
 td_api::object_ptr<td_api::Object> Client::execute(object_ptr<td_api::Function> &&f) {
@@ -10411,7 +10489,9 @@ void Client::on_result(td::uint64 id, object_ptr<td_api::Object> result) {
   }
 
   auto *handler_ptr = handlers_.get(id);
-  CHECK(handler_ptr != nullptr);
+  if (handler_ptr == nullptr) {
+    return;
+  }
   auto handler = std::move(*handler_ptr);
   handler->on_result(std::move(result));
   handlers_.erase(id);
@@ -10438,9 +10518,11 @@ void Client::on_closed() {
   }
 
   while (!cmd_queue_.empty()) {
-    auto query = std::move(cmd_queue_.front());
+    auto queued = std::move(cmd_queue_.front());
     cmd_queue_.pop();
-    fail_query_closing(std::move(query));
+    if (*queued != nullptr) {
+      fail_query_closing(std::move(*queued));
+    }
   }
 
   while (!pending_send_message_queries_.empty()) {
@@ -14180,7 +14262,11 @@ void Client::on_message_send_succeeded(object_ptr<td_api::message> &&message, in
   message_info->is_content_changed = false;
 
   auto query_id = extract_yet_unsent_message_query_id(chat_id, old_message_id);
-  auto &query = *pending_send_message_queries_[query_id];
+  auto it = pending_send_message_queries_.find(query_id);
+  if (it == pending_send_message_queries_.end()) {
+    return;
+  }
+  auto &query = *it->second;
   if (query.is_multisend) {
     if (query.query->method() == "forwardmessages" || query.query->method() == "copymessages") {
       query.messages.push_back(td::json_encode<td::string>(JsonMessageId(new_message_id)));
@@ -14211,7 +14297,11 @@ void Client::on_message_send_succeeded(object_ptr<td_api::message> &&message, in
 void Client::on_message_send_failed(int64 chat_id, int64 old_message_id, int64 new_message_id,
                                     object_ptr<td_api::error> &&error) {
   auto query_id = extract_yet_unsent_message_query_id(chat_id, old_message_id);
-  auto &query = *pending_send_message_queries_[query_id];
+  auto it = pending_send_message_queries_.find(query_id);
+  if (it == pending_send_message_queries_.end()) {
+    return;
+  }
+  auto &query = *it->second;
   if (query.is_multisend) {
     if (query.error == nullptr || query.error->message_ == "Group send failed") {
       if (is_special_error_code(error->code_) || error->code_ == 406 || error->message_ == "Group send failed") {
@@ -18093,6 +18183,16 @@ td::int64 Client::get_send_message_query_id(PromisedQueryPtr query, bool is_mult
   pending_query = td::make_unique<PendingSendMessageQuery>();
   pending_query->query = std::move(query);
   pending_query->is_multisend = is_multisend;
+
+  wait_for(QUERY_TIMEOUT, [query_id](Client *client) {
+    auto it = client->pending_send_message_queries_.find(query_id);
+    if (it != client->pending_send_message_queries_.end()) {
+      auto pending_query_ptr = std::move(it->second);
+      client->pending_send_message_queries_.erase(it);
+      fail_query_timeout(std::move(pending_query_ptr->query));
+    }
+  });
+
   return query_id;
 }
 
@@ -18174,6 +18274,14 @@ void Client::fail_query_conflict(td::CSlice message, PromisedQueryPtr &&query) {
         }))
         .release();
   }
+}
+
+void Client::run_timeout_callback(std::function<void(Client *)> callback) {
+  callback(this);
+}
+
+void Client::fail_query_timeout(PromisedQueryPtr query) {
+  fail_query(504, "Gateway Timeout: Request processing timed out after 3 seconds", std::move(query));
 }
 
 void Client::fail_query_closing(PromisedQueryPtr &&query) {

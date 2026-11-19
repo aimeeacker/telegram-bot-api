@@ -8,7 +8,6 @@
 #include "telegram-bot-api/ClientParameters.h"
 #include "telegram-bot-api/HttpConnection.h"
 #include "telegram-bot-api/HttpServer.h"
-#include "telegram-bot-api/HttpStatConnection.h"
 #include "telegram-bot-api/Stats.h"
 #include "telegram-bot-api/Watchdog.h"
 
@@ -168,6 +167,7 @@ int main(int argc, char *argv[]) {
   parameters->version_ = "10.4";
   parameters->shared_data_ = shared_data;
   parameters->start_time_ = start_time;
+  parameters->local_mode_ = true;
   auto net_query_stats = td::create_net_query_stats();
   parameters->net_query_stats_ = net_query_stats;
 
@@ -175,16 +175,20 @@ int main(int argc, char *argv[]) {
   bool need_print_usage = false;
   bool need_print_version = false;
   int http_port = 8081;
-  int http_stat_port = 0;
   td::string http_ip_address = "0.0.0.0";
-  td::string http_stat_ip_address = "0.0.0.0";
   td::string log_file_path;
   int default_verbosity_level = 0;
   int memory_verbosity_level = VERBOSITY_NAME(INFO);
   td::int64 log_max_file_size = 2000000000;
-  td::string working_directory = PSTRING() << "." << TD_DIR_SLASH;
+  auto get_env_string = [](const char *name, const char *default_value = "") -> td::string {
+    auto value = std::getenv(name);
+    return value == nullptr || value[0] == '\0' ? td::string(default_value) : td::string(value);
+  };
+
+  td::string preset_bots_str = get_env_string("TELEGRAM_PRESET_BOTS");
+  td::string working_directory = get_env_string("TELEGRAM_WORK_DIR", "/opt/telegram-bot-api-data");
   td::string files_directory;
-  td::string temporary_directory;
+  td::string temporary_directory = get_env_string("TELEGRAM_TEMP_DIR", "/tmp/telegram-bot-api");
   td::string username;
   td::string groupname;
   td::uint64 max_connections = 0;
@@ -198,12 +202,11 @@ int main(int argc, char *argv[]) {
     }
     return 0;
   }(std::getenv("TELEGRAM_API_ID"));
-  parameters->api_hash_ = [](auto x) -> td::string {
-    if (x) {
-      return x;
-    }
-    return td::string();
-  }(std::getenv("TELEGRAM_API_HASH"));
+  parameters->api_hash_ = get_env_string("TELEGRAM_API_HASH");
+
+  shared_data->mcp_bot_token_ = get_env_string("TELEGRAM_MCP_BOT_TOKEN");
+  shared_data->mcp_chat_id_ = get_env_string("TELEGRAM_MCP_CHAT_ID");
+  shared_data->mcp_bearer_token_ = get_env_string("TELEGRAM_MCP_BEARER_TOKEN");
 
   options.set_usage(td::Slice(argv[0]), "--api-id=<arg> --api-hash=<arg> [--local] [OPTION]...");
   options.set_description("Telegram Bot API server");
@@ -222,13 +225,18 @@ int main(int argc, char *argv[]) {
                      td::OptionParser::parse_string(parameters->api_hash_));
   options.add_checked_option('p', "http-port", PSLICE() << "HTTP listening port (default is " << http_port << ")",
                              td::OptionParser::parse_integer(http_port));
-  options.add_checked_option('s', "http-stat-port", "HTTP statistics port",
-                             td::OptionParser::parse_integer(http_stat_port));
-  options.add_option('d', "dir", "server working directory", td::OptionParser::parse_string(working_directory));
+  options.add_option(
+      'd', "dir",
+      "server working directory (defaults to the value of the TELEGRAM_WORK_DIR environment variable or "
+      "/opt/telegram-bot-api-data)",
+      td::OptionParser::parse_string(working_directory));
   options.add_option('f', "files-dir", "directory for storing auxiliary files (defaults to the working directory)",
-                     td::OptionParser::parse_string(files_directory));
-  options.add_option('t', "temp-dir", "directory for storing HTTP server temporary files",
-                     td::OptionParser::parse_string(temporary_directory));
+      td::OptionParser::parse_string(files_directory));
+  options.add_option(
+      't', "temp-dir",
+      "directory for storing HTTP server temporary files (defaults to the value of the TELEGRAM_TEMP_DIR "
+      "environment variable or /tmp/telegram-bot-api)",
+      td::OptionParser::parse_string(temporary_directory));
   options.add_checked_option('\0', "filter",
                              "\"<remainder>/<modulo>\". Allow only bots with 'bot_user_id % modulo == remainder'",
                              [&](td::Slice rem_mod) {
@@ -254,14 +262,13 @@ int main(int argc, char *argv[]) {
                                http_ip_address = ip_address.str();
                                return td::Status::OK();
                              });
-  options.add_checked_option('\0', "http-stat-ip-address",
-                             "local IP address, HTTP statistics connections to which will be accepted. By default, "
-                             "statistics connections to any local IPv4 address are accepted",
-                             [&](td::Slice ip_address) {
-                               TRY_STATUS(td::IPAddress::get_ip_address(ip_address.str()));
-                               http_stat_ip_address = ip_address.str();
-                               return td::Status::OK();
-                             });
+  options.add_option('\0', "preset-bots", "comma-separated list of preset bot tokens (<bot_id>:<secret>[,...])",
+                     [&](td::Slice bots) {
+                       if (!preset_bots_str.empty()) {
+                         preset_bots_str += ',';
+                       }
+                       preset_bots_str += bots.str();
+                     });
 
   options.add_option('l', "log", "path to the file where the log will be written",
                      td::OptionParser::parse_string(log_file_path));
@@ -332,6 +339,24 @@ int main(int argc, char *argv[]) {
     LOG(PLAIN) << argv[0] << ": " << r_non_options.error().message();
     LOG(PLAIN) << options;
     return 1;
+  }
+
+  auto add_preset_token = [&](td::Slice token) {
+    token = td::trim(token);
+    if (token.empty()) {
+      return;
+    }
+    auto colon_pos = token.find(':');
+    if (colon_pos != td::Slice::npos && colon_pos > 0) {
+      td::Slice bot_id = token.substr(0, colon_pos);
+      shared_data->preset_bots_[bot_id.str()] = token.str();
+    }
+  };
+  for (auto token : td::full_split(preset_bots_str, ',')) {
+    add_preset_token(token);
+  }
+  if (!shared_data->mcp_bot_token_.empty()) {
+    add_preset_token(shared_data->mcp_bot_token_);
   }
 
   td::CombinedLog log;
@@ -496,6 +521,14 @@ int main(int argc, char *argv[]) {
   // LOG(WARNING) << "Bot API server with commit " << td::GitInfo::commit() << ' '
   //              << (td::GitInfo::is_dirty() ? "(dirty)" : "") << " started";
   LOG(WARNING) << "Bot API " << parameters->version_ << " server started";
+  if (!shared_data->mcp_bot_token_.empty() && !shared_data->mcp_chat_id_.empty()) {
+    LOG(WARNING) << "MCP endpoint enabled on /mcp"
+                 << (shared_data->mcp_bearer_token_.empty() ? " without bearer authentication"
+                                                            : " with bearer authentication");
+  } else {
+    LOG(WARNING) << "MCP endpoint is present but tool calls are disabled until TELEGRAM_MCP_BOT_TOKEN and "
+                    "TELEGRAM_MCP_CHAT_ID are configured";
+  }
 
   td::ConcurrentScheduler sched(SharedData::get_thread_count() - 1, cpu_affinity);
 
@@ -518,17 +551,6 @@ int main(int argc, char *argv[]) {
                 td::create_actor<HttpConnection>("HttpConnection", client_manager, shared_data));
           })
       .release();
-
-  if (http_stat_port != 0) {
-    sched
-        .create_actor_unsafe<HttpServer>(
-            SharedData::get_client_scheduler_id(), "HttpStatsServer", http_stat_ip_address, http_stat_port,
-            [client_manager] {
-              return td::ActorOwn<td::HttpInboundConnection::Callback>(
-                  td::create_actor<HttpStatConnection>("HttpStatConnection", client_manager));
-            })
-        .release();
-  }
 
   constexpr double WATCHDOG_TIMEOUT = 0.25;
   auto watchdog_id = sched.create_actor_unsafe<Watchdog>(SharedData::get_watchdog_scheduler_id(), "Watchdog",

@@ -254,6 +254,33 @@ class PromiseDeleter {
 };
 using PromisedQueryPtr = std::unique_ptr<Query, PromiseDeleter>;
 
+inline PromisedQueryPtr make_internal_query(td::Slice token, td::Slice method,
+                                            const td::vector<std::pair<td::string, td::string>> &string_args,
+                                            std::shared_ptr<SharedData> shared_data,
+                                            const td::IPAddress &peer_ip_address = td::IPAddress(),
+                                            td::Promise<td::unique_ptr<Query>> promise = {}, bool is_test_dc = false,
+                                            bool is_internal = false) {
+  td::vector<td::BufferSlice> containers;
+  containers.reserve(2 + 2 * string_args.size());
+  auto add_string = [&containers](td::Slice str) {
+    containers.emplace_back(str);
+    return containers.back().as_mutable_slice();
+  };
+
+  auto token_copy = add_string(token);
+  auto method_copy = add_string(method);
+  td::vector<std::pair<td::MutableSlice, td::MutableSlice>> args;
+  args.reserve(string_args.size());
+  for (const auto &arg : string_args) {
+    args.emplace_back(add_string(arg.first), add_string(arg.second));
+  }
+
+  auto query = td::make_unique<Query>(std::move(containers), token_copy, is_test_dc, method_copy, std::move(args),
+                                      td::vector<std::pair<td::MutableSlice, td::MutableSlice>>(),
+                                      td::vector<td::HttpFile>(), std::move(shared_data), peer_ip_address, is_internal);
+  return PromisedQueryPtr(query.release(), PromiseDeleter(std::move(promise)));
+}
+
 template <class Jsonable>
 void answer_query(const Jsonable &result, PromisedQueryPtr query, td::Slice description = td::Slice()) {
   query->set_ok(td::json_encode<td::BufferSlice>(JsonQueryOk<Jsonable>(result, description)));
