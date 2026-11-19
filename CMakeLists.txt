@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
 
-project(TelegramBotApi VERSION 10.3 LANGUAGES CXX)
+project(TelegramBotApi VERSION 10.4 LANGUAGES CXX)
 
 option(USE_PREBUILT_TDLIB "Use precompiled TDLib static libraries" ON)
 set(PREBUILT_TDLIB_DIR "" CACHE PATH "Path to precompiled TDLib directory")
