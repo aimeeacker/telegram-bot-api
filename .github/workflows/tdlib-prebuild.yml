@@ -64,6 +64,9 @@ jobs:
       - name: Patch TDLib for MCP support
         run: python3 scripts/patch-tdlib-mcp.py
 
+      - name: Patch TDLib for 3s query timeout
+        run: python3 scripts/patch-tdlib-query-timeout.py
+
       - name: Build TDLib static libraries
         run: |
           cmake -S td -B build-td -DCMAKE_BUILD_TYPE=Release
@@ -159,6 +162,9 @@ jobs:
 
       - name: Patch TDLib for MCP support
         run: python3 scripts/patch-tdlib-mcp.py
+
+      - name: Patch TDLib for 3s query timeout
+        run: python3 scripts/patch-tdlib-query-timeout.py
 
       - name: Build TDLib static libraries in Alpine container
         run: |

@@ -17,7 +17,6 @@
 
 #include "td/actor/actor.h"
 #include "td/actor/SignalSlot.h"
-#include "td/actor/SleepActor.h"
 
 #include "td/utils/Action.h"
 #include "td/utils/common.h"
@@ -372,11 +371,6 @@ class Client final : public WebhookActor::Callback {
   class TdQueryCallback {
    public:
     virtual void on_result(object_ptr<td_api::Object> result) = 0;
-    virtual void on_timeout() {
-    }
-    virtual bool has_timeout() const {
-      return false;
-    }
     TdQueryCallback() = default;
     TdQueryCallback(const TdQueryCallback &) = delete;
     TdQueryCallback &operator=(const TdQueryCallback &) = delete;
@@ -1132,23 +1126,6 @@ class Client final : public WebhookActor::Callback {
 
   void fail_query_conflict(td::CSlice message, PromisedQueryPtr &&query);
 
-  static void fail_query_timeout(PromisedQueryPtr query);
-
-  static constexpr double QUERY_TIMEOUT = 3.0;
-
-  void run_timeout_callback(std::function<void(Client *)> callback);
-
-  template <typename F>
-  void wait_for(double timeout, F &&on_timeout) {
-    td::create_actor<td::SleepActor>(
-        "WaitForTimeoutActor", timeout,
-        td::PromiseCreator::lambda([actor_id = actor_id(this), on_timeout = std::forward<F>(on_timeout)](
-                                       td::Result<td::Unit>) mutable {
-          send_closure(actor_id, &Client::run_timeout_callback, std::function<void(Client *)>(std::move(on_timeout)));
-        }))
-        .release();
-  }
-
   struct ClosingError {
     int code;
     int retry_after;
@@ -1792,7 +1769,7 @@ class Client final : public WebhookActor::Callback {
   td::string files_dir_;
   td::ActorOwn<td::ClientActor> td_client_;
   td::ActorContext context_;
-  std::queue<std::shared_ptr<PromisedQueryPtr>> cmd_queue_;
+  std::queue<PromisedQueryPtr> cmd_queue_;
   td::vector<object_ptr<td_api::Object>> pending_updates_;
   td::Container<td::unique_ptr<TdQueryCallback>> handlers_;
 
