@@ -42,7 +42,7 @@ def main() -> None:
             """  void add_handler(uint64 id, std::shared_ptr<ResultHandler> handler);
   std::shared_ptr<ResultHandler> extract_handler(uint64 id);
   bool should_timeout_query(const NetQueryPtr &query) const;
-  void schedule_query_timeout(const NetQueryPtr &query);
+  void schedule_query_timeout(NetQueryPtr &query);
   void on_query_timeout(uint64 query_id, NetQueryRef query_ref);""",
         ),
     ]
@@ -116,7 +116,7 @@ bool Td::should_timeout_query(const NetQueryPtr &query) const {
   return true;
 }
 
-void Td::schedule_query_timeout(const NetQueryPtr &query) {
+void Td::schedule_query_timeout(NetQueryPtr &query) {
   if (!should_timeout_query(query)) {
     return;
   }
